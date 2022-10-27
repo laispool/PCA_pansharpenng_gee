@@ -1,0 +1,145 @@
+// Script to pansharp a multispectral image through PCA
+// Earth Engine - Code Editor
+
+// Create geometry
+var geometry = ee.Geometry.Polygon(
+         [[[-48.437665341965214,-25.9882255598952],
+            [-48.90439125853334,-25.9882255598952],
+            [-48.90439125853334,-26.483573101319053],
+            [-48.437665341965214,-26.483573101319053],
+            [-48.437665341965214,-25.9882255598952]]]);
+
+// Slect and map a true and false color image
+// see how to choose an image: https://github.com/laispool/ImageCollection_table 
+var image = ee.Image('COPERNICUS/S2_SR_HARMONIZED/20220703T132239_20220703T132238_T22JGS') // create the variable that contains the image
+    .clip(geometry); // clip from geometry
+var vis_false = { 
+  min: 100,
+  max: 2000,
+  bands: ['B11', 'B3', 'B2'],
+};
+var vis_rgb = {
+  min: 100,
+  max: 2000,
+  bands: ['B4', 'B3', 'B2'],
+};
+
+// Display the image.
+Map.centerObject(geometry, 10), //Babitonga Bay (SC-Brazil) location
+Map.addLayer(image, vis_rgb, 'true color composition',false);
+Map.addLayer(image, vis_false, 'false color composition',false);
+// BEGIN PCA
+print('Begin PCA', image);
+// Select which bands to use for the PCA
+var PCAbands = ['B2', 'B3', 'B4', 'B8', 'B11'];
+
+// Convert the image to a 2D array for the later matrix computations
+var arrayImage = image.select(PCAbands).toArray();
+
+// Calculate the covariance using the reduceRegion method
+var covar = arrayImage.reduceRegion({
+    reducer: ee.Reducer.covariance(),
+    maxPixels: 1e9
+});
+
+// Extract the covariance matrix and store it as an array
+var covarArray = ee.Array(covar.get('array'));
+
+//Compute and extract the eigenvectors
+var eigens = covarArray.eigen();
+var eigenVectors = eigens.slice(1, 1); //extract the eigenvectors for the PCA
+
+// Perform matrix multiplication
+var principalComponents = ee.Image(eigenVectors)
+    .matrixMultiply(arrayImage.toArray(1)); //Each multiplication results in a principal component
+
+// Convert back to a multi-band image and display the first principal component (pc1):    
+var pcImage = principalComponents
+    // Throw out an unneeded dimension, [[]] -> [].
+    .arrayProject([0])
+    // Make the one band array image a multi-band image, [] -> image.
+    .arrayFlatten([
+        ['pc1', 'pc2', 'pc3', 'pc4', 'pc5']
+    ]);
+
+// Stretch this to the appropriate scale.
+Map.addLayer(pcImage.select('pc1'), {}, 'pc1',false);
+
+//The min and max values will need to change if you map different bands or locations.
+var visParamsPCA = {
+    bands: ['pc1', 'pc4', 'pc5'],
+    min: [-455.09, -2.206, -4.53],
+    max: [-417.59, -1.3, -4.18]
+};
+
+Map.addLayer(pcImage, visParamsPCA, 'PC_multi',false);
+
+/*
+Each axis dynamically captures some aspect of the variation within 
+the dataset. Thus, the mapped PCA may differ substantially based on 
+where you have performed the PCA and which bands you are mapping.
+*/
+// END PCA
+print(pcImage,'End of PCA');
+
+// BEGIN Pnasharpening through PCA
+print('Begin Pnasharpening');
+
+var img2 = image.select(['B2','B11']); //Change 'B3' to 'B4' or 'B8' to analise the others correlations
+var pixelVals = img2.reduceRegion({
+  reducer: ee.Reducer.toList(),
+  geometry: geometry,
+  scale: 200,
+  });
+print('Pixel Lists:', pixelVals); 
+// Convert NIR and SWIR value lists to an array to be plotted along the y-axis.
+var y = ee.List(pixelVals.get('B11'));
+var x = ee.List(pixelVals.get('B2')); //Change 'B3' to 'B4' or 'B8' to analise the others correlations
+
+// Define the chart and print it to the console.
+var chart = ui.Chart.array.values({array: y, axis: 0, xLabels: x}).setOptions({
+  title: 'Relationship Among Spectral Bands - Blue', // Change the title to match the band analised
+  colors: ['cf513e'],
+  hAxis: {
+    title: 'B2 reflectance (x1e3)', //Change 'B3' to 'B4' or 'B8' to analise the others correlations
+    titleTextStyle: {italic: false, bold: true}
+  },
+  vAxis: {
+    title: 'SWIR reflectance (x1e3)',
+    titleTextStyle: {italic: false, bold: true}
+  },
+  pointSize: 4,
+  dataOpacity: 0.4,
+  legend: {position: 'right'},
+  trendlines: {
+        0: {
+          type: 'linear',
+          color: 'lightblue',
+          lineWidth: 3,
+          opacity: 0.7,
+          showR2: true,
+          visibleInLegend: true},},
+});
+print(chart);
+
+// Import the geeSharp module
+var geeSharp = require('users/aazuspan/geeSharp:geeSharp');
+
+// Pan-sharpen!
+print(sharpened)
+
+// After analysing the charts, choose the band that showed the bigest r^2
+function sharpened (image) {
+  var sharp = geeSharp.sharpen(image.select(['B11']), image.select(['B8'])).rename ('sharp');
+  return image.addBands([sharp])}
+
+var image = sharpened(image);
+//print(image)
+
+var vis_sharp = {
+  min: 100,
+  max: 2000,
+  bands: ['sharp', 'B3', 'B2'],
+};  
+Map.addLayer(image, vis_sharp, 'sharpened')
+print('End of Pansharpening');
